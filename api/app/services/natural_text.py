@@ -1,0 +1,1 @@
+# Document text generation templates

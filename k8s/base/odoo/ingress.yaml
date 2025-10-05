@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: odoo
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  rules:
+    - host: odoo.local
+      http:
+        paths:
+          - path: /odoo(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: odoo
+                port:
+                  number: 80

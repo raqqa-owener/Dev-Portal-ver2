@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: cj-extract-field }
+spec:
+  schedule: "15 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: curlimages/curl:8.8.0
+              env:
+                - name: TOKEN
+                  valueFrom: { secretKeyRef: { name: api-auth, key: API_BEARER_TOKEN } }
+              command: ["sh","-lc"]
+              args:
+                - >
+                  curl -sS -X POST
+                  -H "Authorization: Bearer $TOKEN"
+                  -H "Content-Type: application/json"
+                  --data '{"models":[],"fields":[],"mode":"upsert_if_changed"}'
+                  http://portal-api.$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace).svc.cluster.local/extract/field

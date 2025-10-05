@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: infra
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+      - name: db
+        image: postgres:16
+        ports: [{ name: pg, containerPort: 5432 }]
+        env:
+        - { name: POSTGRES_DB, value: devportal }
+        - { name: POSTGRES_USER, value: dev }
+        - { name: POSTGRES_PASSWORD, value: change-postgres-pass }
+        volumeMounts:
+        - { name: data, mountPath: /var/lib/postgresql/data }
+  volumeClaimTemplates:
+  - metadata: { name: data }
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources: { requests: { storage: 5Gi } }

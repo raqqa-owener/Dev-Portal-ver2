@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odoo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: odoo
+  template:
+    metadata:
+      labels:
+        app: odoo
+    spec:
+      containers:
+        - name: odoo
+          image: odoo:18
+          ports:
+            - name: http
+              containerPort: 8069
+          env:
+            # Odoo（イメージの起動スクリプト）が読む想定
+            - name: HOST
+              value: postgres
+            - name: PORT
+              value: "5432"
+            - name: USER
+              valueFrom:
+                secretKeyRef: { name: postgres-auth, key: ODOO_DB_USER }
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-auth, key: ODOO_DB_PASSWORD }
+
+            # PostgreSQL クライアント標準の環境変数（psycopg2 が読む）
+            - name: PGHOST
+              value: postgres
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef: { name: postgres-auth, key: ODOO_DB_USER }
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-auth, key: ODOO_DB_PASSWORD }
+
+            # DB 名（Odoo エントリポイント／psycopg2 互換）
+            - name: DATABASE
+              value: odoo
+            - name: PGDATABASE
+              value: odoo
+
+            - name: ODOO_PROXY_MODE
+              value: "true"
+          volumeMounts:
+            - name: filestore
+              mountPath: /var/lib/odoo
+          readinessProbe:
+            httpGet: { path: /web, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /web, port: http }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+      volumes:
+        - name: filestore
+          persistentVolumeClaim:
+            claimName: odoo-filestore

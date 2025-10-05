@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: postgres }
+spec:
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        storageClassName: gp3
+        resources: { requests: { storage: 100Gi } }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: chroma }
+spec:
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        storageClassName: gp3
+        resources: { requests: { storage: 50Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: odoo-filestore }
+spec:
+  storageClassName: gp3
+  resources: { requests: { storage: 100Gi } }

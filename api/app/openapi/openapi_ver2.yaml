@@ -1,0 +1,1451 @@
+openapi: 3.1.0
+info:
+  title: Dev Portal & Translation → Chroma Pipeline API
+  version: 0.2.0
+  description: >
+    抽出 → 翻訳 →（任意で書き戻し）→ パッケージング → Chroma upsert のパイプラインと、
+    portal_* テーブルの CRUD/取り込みを提供する API。
+
+    認証ポリシー:
+      - dev: 認証なし（Bearer 任意）
+      - prod: Bearer(JWT) 必須（※本開発スコープ外。オフショアで別実装/適用。OAS では overlay で有効化想定）
+
+    本番(AWS)の想定:
+      - 本番では /chroma/search のみ利用（ユーザーが投入したデータやマニュアルの検索用途）
+      - Extract/Translate/Writeback/Package/Upsert 系は dev 専用（prod では無効）
+
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+
+servers:
+  - url: https://api.example.com
+    description: default (env overlay で prod/dev を切り替え)
+
+# dev では要件なし。prod では overlay で `security: [{ bearerAuth: [] }]` を適用。
+security: []
+
+tags:
+  - name: Portal Model
+    description: portal_model の CRUD / 取込
+  - name: Portal Field
+    description: portal_fields の CRUD / 取込 / 抽出
+  - name: Portal View Common
+    description: portal_view_common の CRUD / 取込 / ブートストラップ / 抽出
+  - name: Portal View
+    description: portal_view（種別ごとの設定）
+  - name: Portal Tab
+    description: portal_tab の CRUD / 一括
+  - name: Portal Smart Button
+    description: portal_smart_button の CRUD / 一括
+  - name: Portal Menu
+    description: portal_menu の CRUD / 一括 / 取込（将来）
+  - name: Extract
+    description: translate への抽出UPSERT（dev専用、prod無効）
+    x-dev-only: true
+  - name: Translate
+    description: 翻訳ジョブ（pending → translated）（dev専用、prod無効）
+    x-dev-only: true
+  - name: Writeback
+    description: 翻訳結果の portal_* への書き戻し（任意）（dev専用、prod無効）
+    x-dev-only: true
+  - name: Package
+    description: translated → ready_for_chroma & portal_chroma_doc へUPSERT（dev専用、prod無効）
+    x-dev-only: true
+  - name: Chroma
+    description: Chroma 連携（prod は /chroma/search のみ有効）
+  - name: Status
+    description: サマリ/トレース
+
+paths:
+  ############################################
+  # Portal: model
+  ############################################
+  /portal/model:
+    get:
+      tags: [Portal Model]
+      summary: モデル一覧
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, minimum: 1, maximum: 500 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalModelList' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Portal Model]
+      summary: モデル作成
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalModelCreate' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalModel' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/model/{id}:
+    get:
+      tags: [Portal Model]
+      summary: モデル取得
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalModel' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Portal Model]
+      summary: モデル更新（部分）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalModelUpdate' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalModel' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Portal Model]
+      summary: モデル削除
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '204': { description: No Content }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/model/import:
+    post:
+      tags: [Portal Model]
+      summary: ir_model_src から選択取込（任意で scaffold）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ImportModelRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ImportResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  ############################################
+  # Portal: field
+  ############################################
+  /portal/field:
+    get:
+      tags: [Portal Field]
+      summary: フィールド一覧
+      parameters:
+        - in: query
+          name: model
+          schema: { type: string }
+        - in: query
+          name: field_name
+          schema: { type: string }
+        - in: query
+          name: origin
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalFieldList' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Portal Field]
+      summary: フィールド作成
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalFieldCreate' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalField' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/field/{id}:
+    get:
+      tags: [Portal Field]
+      summary: フィールド取得
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalField' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Portal Field]
+      summary: フィールド更新（部分）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalFieldUpdate' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalField' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Portal Field]
+      summary: フィールド削除
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '204': { description: No Content }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/field/import:
+    post:
+      tags: [Portal Field]
+      summary: ir_field_src から選択取込
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ImportFieldRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ImportResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/field/extract:
+    post:
+      tags: [Portal Field, Extract]
+      summary: 指定フィールドを translate にキュー投入（UPSERT）
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ExtractFieldRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ExtractResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  ############################################
+  # Portal: view_common (action-centric)
+  ############################################
+  /portal/view_common:
+    get:
+      tags: [Portal View Common]
+      summary: 一覧
+      parameters:
+        - in: query
+          name: action_xmlid
+          schema: { type: string }
+        - in: query
+          name: model
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewCommonList' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view_common/{id}:
+    get:
+      tags: [Portal View Common]
+      summary: 詳細
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewCommon' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Portal View Common]
+      summary: 更新（部分）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewCommonUpdate' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewCommon' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view_common:
+    post:
+      tags: [Portal View Common]
+      summary: 作成
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action_xmlid: { type: string }
+                model: { type: string }
+                action_name: { type: string }
+                model_label: { type: string }
+                model_table: { type: string }
+                view_types: { type: array, items: { type: string } }
+                primary_view_type: { type: string }
+                help_ja_text: { type: string }
+                help_en_text: { type: string }
+                ai_purpose: { type: string }
+                ai_purpose_i18n: { type: object, additionalProperties: true }
+              required: [action_xmlid, model]
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewCommon' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view_common/import:
+    post:
+      tags: [Portal View Common]
+      summary: ir_view_src（action-centric）から取込（UPSERT）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ImportViewCommonRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ImportResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view_common/bootstrap_view:
+    post:
+      tags: [Portal View Common, Portal View]
+      summary: view_types[] を展開し portal_view の骨組みを作成
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapViewRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view_common/extract:
+    post:
+      tags: [Portal View Common, Extract]
+      summary: ai_purpose / help_ja_text を translate にキュー投入（JAあり & EN空のみ）
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ExtractViewCommonRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ExtractResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  ############################################
+  # Portal: view (type-specific)
+  ############################################
+  /portal/view:
+    get:
+      tags: [Portal View]
+      summary: 一覧
+      parameters:
+        - in: query
+          name: common_id
+          schema: { type: integer }
+        - in: query
+          name: view_type
+          schema: { type: string, enum: [form, kanban, list, calendar, search, graph, pivot, dashboard, tree, map] }
+        - in: query
+          name: model
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewList' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Portal View]
+      summary: 作成
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewCreate' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalView' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view/{id}:
+    get:
+      tags: [Portal View]
+      summary: 取得
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalView' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Portal View]
+      summary: 更新（部分）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalViewUpdate' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalView' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view/set_primary:
+    post:
+      tags: [Portal View]
+      summary: 主ビューを設定（common_id 内で単一化）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SetPrimaryRequest' } } }
+      responses:
+        '204': { description: No Content }
+      default: { $ref: '#/components/responses/Problem' }
+
+  /portal/view/bootstrap_from_common:
+    post:
+      tags: [Portal View]
+      summary: view_common から骨組み生成（別名エンドポイント）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapViewRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  ############################################
+  # Portal: tab
+  ############################################
+  /portal/tab:
+    get:
+      tags: [Portal Tab]
+      summary: タブ一覧
+      parameters:
+        - in: query
+          name: view_id
+          schema: { type: integer }
+        - in: query
+          name: tab_key
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalTabList' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Portal Tab]
+      summary: 作成
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalTabCreate' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalTab' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/tab/{id}:
+    get:
+      tags: [Portal Tab]
+      summary: 取得
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalTab' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Portal Tab]
+      summary: 更新（部分）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalTabUpdate' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalTab' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/tab/bulk_upsert:
+    post:
+      tags: [Portal Tab]
+      summary: 複数タブの一括UPSERT
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BulkPortalTabRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/BulkUpsertResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  ############################################
+  # Portal: smart_button
+  ############################################
+  /portal/smart_button:
+    get:
+      tags: [Portal Smart Button]
+      summary: スマートボタン一覧
+      parameters:
+        - in: query
+          name: view_id
+          schema: { type: integer }
+        - in: query
+          name: button_key
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalSmartButtonList' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Portal Smart Button]
+      summary: 作成
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalSmartButtonCreate' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalSmartButton' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/smart_button/{id}:
+    patch:
+      tags: [Portal Smart Button]
+      summary: 更新（部分）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalSmartButtonUpdate' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalSmartButton' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /portal/smart_button/bulk_upsert:
+    post:
+      tags: [Portal Smart Button]
+      summary: 複数ボタンの一括UPSERT
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BulkPortalSmartButtonRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/BulkUpsertResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  ############################################
+  # Portal: menu
+  ############################################
+  /portal/menu:
+    get:
+      tags: [Portal Menu]
+      summary: メニュー一覧
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalMenuList' } } }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Portal Menu]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalMenuCreate' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalMenu' } } }
+
+  /portal/menu/{id}:
+    patch:
+      tags: [Portal Menu]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PortalMenuUpdate' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/PortalMenu' } } }
+
+  /portal/menu/bulk_upsert:
+    post:
+      tags: [Portal Menu]
+      summary: 複数メニューの一括UPSERT
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BulkPortalMenuRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/BulkUpsertResult' } } }
+
+  ############################################
+  # Extract（translate へ） — dev専用
+  ############################################
+  /extract/view_common:
+    post:
+      tags: [Extract]
+      summary: view_common（ai_purpose / help）を translate にUPSERT
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ExtractViewCommonRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ExtractResult' } } }
+
+  /extract/field:
+    post:
+      tags: [Extract]
+      summary: field（label/notes）を translate にUPSERT
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ExtractFieldRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ExtractResult' } } }
+
+  ############################################
+  # Translate — dev専用
+  ############################################
+  /translate:
+    get:
+      tags: [Translate]
+      summary: translate 行の一覧
+      x-dev-only: true
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, translated, ready_for_chroma, done, failed] }
+        - in: query
+          name: entity
+          schema: { $ref: '#/components/schemas/Entity' }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/TranslateList' } } }
+
+  /translate/run:
+    post:
+      tags: [Translate]
+      summary: pending を翻訳して translated に
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TranslateRunRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/TranslateRunResult' } } }
+
+  ############################################
+  # Writeback（任意） — dev専用
+  ############################################
+  /writeback/view_common:
+    post:
+      tags: [Writeback]
+      summary: ai_purpose_i18n.en_US / help_en_text を portal_view_common に書き戻し
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/WritebackViewCommonRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/WritebackResult' } } }
+
+  /writeback/field:
+    post:
+      tags: [Writeback]
+      summary: label_i18n.en_US を portal_fields に書き戻し（方針次第）
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/WritebackFieldRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/WritebackResult' } } }
+
+  ############################################
+  # Package（portal_chroma_doc） — dev専用
+  ############################################
+  /chroma/package:
+    post:
+      tags: [Package]
+      summary: translated を日本語doc＋厳密メタに整形し portal_chroma_doc へUPSERT（queued）
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ChromaPackageRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ChromaPackageResult' } } }
+
+  /chroma/docs:
+    get:
+      tags: [Package]
+      summary: portal_chroma_doc の一覧
+      x-dev-only: true
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [queued, upserted, failed] }
+        - in: query
+          name: entity
+          schema: { $ref: '#/components/schemas/Entity' }
+        - in: query
+          name: model
+          schema: { type: string }
+        - in: query
+          name: collection
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, minimum: 1, maximum: 500 }
+        - in: query
+          name: cursor
+          schema: { type: string, description: "Keyset cursor（idのBase10文字列）" }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ChromaDocsList' } } }
+
+  ############################################
+  # Chroma upsert — dev専用
+  ############################################
+  /chroma/upsert:
+    post:
+      tags: [Chroma]
+      summary: portal_chroma_doc.status=queued を Chroma に upsert
+      x-dev-only: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ChromaUpsertRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ChromaUpsertResult' } } }
+
+  ############################################
+  # Chroma search — prod で利用（dev でも動かせる）
+  ############################################
+  /chroma/search:
+    post:
+      tags: [Chroma]
+      summary: Chroma 検索（本番で公開する唯一のエンドポイント想定）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ChromaSearchRequest' } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ChromaSearchResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+
+  ############################################
+  # Status / Trace
+  ############################################
+  /status/summary:
+    get:
+      tags: [Status]
+      summary: ステージ別件数サマリ
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/StatusSummary' } } }
+
+  /samples/trace:
+    get:
+      tags: [Status]
+      summary: natural_key 単位の通し状況
+      parameters:
+        - in: query
+          name: natural_key
+          required: true
+          schema: { $ref: '#/components/schemas/NaturalKey' }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Trace' } } }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        detail: { type: string }
+        status: { type: integer }
+      required: [title, status]
+
+    NaturalKey:
+      type: string
+      description: "規約: entity::... 例) field::sale.order::partner_id"
+
+    Entity:
+      type: string
+      enum: [field, view_common, model, tab, smart_button, menu]
+
+    Lang:
+      type: string
+      enum: [ja, en]
+
+    UpsertMode:
+      type: string
+      enum: [upsert, skip_existing, upsert_if_changed]
+      default: upsert_if_changed
+
+    WritebackMode:
+      type: string
+      enum: [overwrite, skip_if_exists]
+      default: skip_if_exists
+
+    CursorList:
+      type: object
+      properties:
+        items: { type: array, items: {} }
+        next_cursor: { type: string, nullable: true }
+
+    ########################################
+    # Portal model
+    ########################################
+    PortalModel:
+      type: object
+      properties:
+        id: { type: integer }
+        model: { type: string }
+        model_table: { type: string }
+        label_i18n: { type: object, additionalProperties: true }
+        notes: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PortalModelCreate:
+      type: object
+      properties:
+        model: { type: string }
+        model_table: { type: string }
+        label_i18n: { type: object, additionalProperties: true }
+        notes: { type: string }
+      required: [model, model_table]
+    PortalModelUpdate:
+      type: object
+      properties:
+        label_i18n: { type: object, additionalProperties: true }
+        notes: { type: string }
+    PortalModelList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PortalModel' } }
+
+    ########################################
+    # Portal field
+    ########################################
+    PortalField:
+      type: object
+      properties:
+        id: { type: integer }
+        model_id: { type: integer }
+        model: { type: string }
+        model_table: { type: string }
+        field_name: { type: string }
+        ttype: { type: string }
+        label_i18n: { type: object, additionalProperties: true }
+        notes: { type: string, nullable: true }
+        origin: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PortalFieldCreate:
+      type: object
+      properties:
+        model: { type: string }
+        field_name: { type: string }
+        ttype: { type: string }
+        label_i18n: { type: object, additionalProperties: true }
+        notes: { type: string }
+      required: [model, field_name, ttype]
+    PortalFieldUpdate:
+      type: object
+      properties:
+        ttype: { type: string }
+        label_i18n: { type: object, additionalProperties: true }
+        notes: { type: string }
+    PortalFieldList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PortalField' } }
+
+    ########################################
+    # Portal view_common
+    ########################################
+    PortalViewCommon:
+      type: object
+      properties:
+        id: { type: integer }
+        action_xmlid: { type: string }
+        action_name: { type: string, nullable: true }
+        model: { type: string }
+        model_label: { type: string, nullable: true }
+        model_table: { type: string }
+        view_types: { type: array, items: { type: string } }
+        primary_view_type: { type: string }
+        help_ja_text: { type: string, nullable: true }
+        help_en_text: { type: string, nullable: true }
+        ai_purpose: { type: string, nullable: true }
+        ai_purpose_i18n: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PortalViewCommonUpdate:
+      type: object
+      properties:
+        help_ja_text: { type: string }
+        ai_purpose: { type: string }
+        ai_purpose_i18n: { type: object, additionalProperties: true }
+        primary_view_type: { type: string }
+        view_types: { type: array, items: { type: string } }
+    PortalViewCommonList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PortalViewCommon' } }
+
+    ########################################
+    # Portal view
+    ########################################
+    PortalView:
+      type: object
+      properties:
+        id: { type: integer }
+        common_id: { type: integer }
+        view_type: { type: string }
+        model: { type: string }
+        view_name: { type: string, nullable: true }
+        is_primary: { type: boolean }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PortalViewCreate:
+      type: object
+      properties:
+        common_id: { type: integer }
+        view_type: { type: string }
+        model: { type: string }
+      required: [common_id, view_type]
+    PortalViewUpdate:
+      type: object
+      properties:
+        view_name: { type: string }
+        enabled: { type: boolean }
+    PortalViewList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PortalView' } }
+
+    ########################################
+    # Portal tab
+    ########################################
+    PortalTab:
+      type: object
+      properties:
+        id: { type: integer }
+        view_id: { type: integer }
+        tab_key: { type: string }
+        tab_label_ja: { type: string, nullable: true }
+        tab_label_en: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PortalTabCreate:
+      type: object
+      properties:
+        view_id: { type: integer }
+        tab_key: { type: string }
+        tab_label_ja: { type: string }
+        tab_label_en: { type: string }
+        model: { type: string }
+      required: [view_id, tab_key]
+    PortalTabUpdate:
+      type: object
+      properties:
+        tab_label_ja: { type: string }
+        tab_label_en: { type: string }
+        model: { type: string }
+    PortalTabList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PortalTab' } }
+    BulkPortalTabRequest:
+      type: array
+      items: { $ref: '#/components/schemas/PortalTabCreate' }
+
+    ########################################
+    # Portal smart_button
+    ########################################
+    PortalSmartButton:
+      type: object
+      properties:
+        id: { type: integer }
+        view_id: { type: integer }
+        button_key: { type: string }
+        label_i18n: { type: object, additionalProperties: true }
+        model: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PortalSmartButtonCreate:
+      type: object
+      properties:
+        view_id: { type: integer }
+        button_key: { type: string }
+        label_i18n: { type: object, additionalProperties: true }
+        model: { type: string }
+      required: [view_id, button_key]
+    PortalSmartButtonUpdate:
+      type: object
+      properties:
+        label_i18n: { type: object, additionalProperties: true }
+        model: { type: string }
+    PortalSmartButtonList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PortalSmartButton' } }
+    BulkPortalSmartButtonRequest:
+      type: array
+      items: { $ref: '#/components/schemas/PortalSmartButtonCreate' }
+
+    ########################################
+    # Portal menu
+    ########################################
+    PortalMenu:
+      type: object
+      properties:
+        id: { type: integer }
+        menu_xmlid: { type: string, nullable: true }
+        name_ja: { type: string, nullable: true }
+        name_en: { type: string, nullable: true }
+        name_i18n: { type: object, additionalProperties: true }
+        model: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PortalMenuCreate:
+      type: object
+      properties:
+        menu_xmlid: { type: string }
+        name_i18n: { type: object, additionalProperties: true }
+        model: { type: string }
+    PortalMenuUpdate:
+      type: object
+      properties:
+        name_i18n: { type: object, additionalProperties: true }
+        model: { type: string }
+    PortalMenuList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PortalMenu' } }
+    BulkPortalMenuRequest:
+      type: array
+      items: { $ref: '#/components/schemas/PortalMenuCreate' }
+
+    ########################################
+    # Import / Bootstrap results
+    ########################################
+    ImportModelRequest:
+      type: object
+      properties:
+        models: { type: array, items: { type: string } }
+        scaffold: { type: boolean, default: true }
+      required: [models]
+    ImportFieldRequest:
+      type: object
+      properties:
+        model: { type: string }
+        fields: { type: array, items: { type: string } }
+      required: [model]
+    ImportViewCommonRequest:
+      type: object
+      properties:
+        action_xmlids: { type: array, items: { type: string } }
+      required: [action_xmlids]
+    ImportResult:
+      type: object
+      properties:
+        created: { type: integer }
+        updated: { type: integer }
+        skipped: { type: integer }
+    BootstrapViewRequest:
+      type: object
+      properties:
+        action_xmlids: { type: array, items: { type: string } }
+        set_primary_from_common: { type: boolean, default: true }
+      required: [action_xmlids]
+    BootstrapResult:
+      type: object
+      properties:
+        created: { type: integer }
+        skipped: { type: integer }
+
+    ########################################
+    # Extract
+    ########################################
+    ExtractViewCommonRequest:
+      type: object
+      properties:
+        action_xmlids: { type: array, items: { type: string } }
+        targets:
+          type: array
+          items: { type: string, enum: [ai_purpose, help] }
+        mode: { $ref: '#/components/schemas/UpsertMode' }
+      required: [action_xmlids]
+    ExtractFieldRequest:
+      type: object
+      properties:
+        models: { type: array, items: { type: string } }
+        fields: { type: array, items: { type: string } }
+        mode: { $ref: '#/components/schemas/UpsertMode' }
+    ExtractResult:
+      type: object
+      properties:
+        picked: { type: integer }
+        inserted: { type: integer }
+        updated: { type: integer }
+        skipped_no_ja: { type: integer }
+        skipped_has_en: { type: integer }
+        skipped_not_found: { type: integer }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              natural_key: { $ref: '#/components/schemas/NaturalKey' }
+              reason: { type: string }
+
+    ########################################
+    # Translate
+    ########################################
+    TranslateRunRequest:
+      type: object
+      properties:
+        limit: { type: integer, default: 200 }
+        source_lang: { type: string, default: ja_JP }
+        target_lang: { type: string, default: en_US }
+        entities: { type: array, items: { $ref: '#/components/schemas/Entity' } }
+    TranslateRunResult:
+      type: object
+      properties:
+        picked: { type: integer }
+        translated: { type: integer }
+        failed: { type: integer }
+        samples:
+          type: array
+          items: { $ref: '#/components/schemas/TranslateRow' }
+    TranslateRow:
+      type: object
+      properties:
+        natural_key: { $ref: '#/components/schemas/NaturalKey' }
+        entity: { $ref: '#/components/schemas/Entity' }
+        model: { type: string }
+        label: { type: string }
+        purpose: { type: string }
+        translated_label: { type: string }
+        translated_purpose: { type: string }
+        status: { type: string, enum: [pending, translated, ready_for_chroma, done, failed] }
+        updated_at: { type: string, format: date-time }
+    TranslateList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/TranslateRow' } }
+
+    ########################################
+    # Writeback
+    ########################################
+    WritebackViewCommonRequest:
+      type: object
+      properties:
+        action_xmlids: { type: array, items: { type: string } }
+        targets:
+          type: array
+          items: { type: string, enum: [ai_purpose, help] }
+        mode: { $ref: '#/components/schemas/WritebackMode' }
+      required: [action_xmlids]
+    WritebackFieldRequest:
+      type: object
+      properties:
+        model: { type: string }
+        fields: { type: array, items: { type: string } }
+        mode: { $ref: '#/components/schemas/WritebackMode' }
+      required: [model]
+    WritebackResult:
+      type: object
+      properties:
+        updated: { type: object, additionalProperties: { type: integer } }
+        skipped: { type: integer }
+
+    ########################################
+    # Package / Chroma docs
+    ########################################
+    ChromaPackageRequest:
+      type: object
+      properties:
+        entities:
+          type: array
+          items: { type: string, enum: [field, view_common] }
+          default: [field, view_common]
+        lang: { $ref: '#/components/schemas/Lang' }
+        collections:
+          type: object
+          properties:
+            field: { type: string, default: portal_field_ja }
+            view_common: { type: string, default: portal_view_common_ja }
+        limit: { type: integer, default: 500 }
+    ChromaPackageResult:
+      type: object
+      properties:
+        queued: { type: integer }
+        skipped_no_change: { type: integer }
+        failed: { type: integer }
+        samples:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_id: { type: string }
+              collection: { type: string }
+              model: { type: string }
+              status: { type: string, enum: [queued, upserted, failed] }
+    ChromaDoc:
+      type: object
+      description: "doc_text は安全長 16KiB を上限（UTF-8 セーフに丸め）"
+      properties:
+        doc_id: { type: string }
+        natural_key: { $ref: '#/components/schemas/NaturalKey' }
+        lang: { $ref: '#/components/schemas/Lang' }
+        collection: { type: string }
+        doc_text: { type: string, maxLength: 16384 }
+        entity: { $ref: '#/components/schemas/Entity' }
+        model: { type: string }
+        model_table: { type: string }
+        field_name: { type: string, nullable: true }
+        action_xmlid: { type: string, nullable: true }
+        target: { type: string, nullable: true }
+        metadata: { type: object, additionalProperties: true }
+        status: { type: string, enum: [queued, upserted, failed] }
+        updated_at: { type: string, format: date-time }
+    ChromaDocsList:
+      allOf:
+        - $ref: '#/components/schemas/CursorList'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/ChromaDoc' } }
+
+    ########################################
+    # Chroma upsert
+    ########################################
+    ChromaUpsertRequest:
+      type: object
+      properties:
+        collections: { type: array, items: { type: string } }
+        limit: { type: integer, default: 1000 }
+        dry_run: { type: boolean, default: false }
+    ChromaUpsertResult:
+      type: object
+      properties:
+        processed: { type: integer }
+        upserted: { type: integer }
+        skipped: { type: integer }
+        failed: { type: integer }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_id: { type: string }
+              reason: { type: string }
+
+    ########################################
+    # Chroma search（prod利用）
+    ########################################
+    ChromaSearchRequest:
+      type: object
+      properties:
+        collection: { type: string }
+        query: { type: string }
+        top_k: { type: integer, default: 5, minimum: 1, maximum: 50 }
+        where:
+          type: object
+          additionalProperties: true
+          description: "メタデータ条件（例: {entity:'field', model:'sale.order'}）"
+      required: [collection, query]
+    ChromaSearchResult:
+      type: object
+      properties:
+        query: { type: string }
+        collection: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_id: { type: string }
+              score: { type: number }
+              doc_text: { type: string }
+              metadata: { type: object, additionalProperties: true }
+
+    ########################################
+    # Status / Trace
+    ########################################
+    StatusSummary:
+      type: object
+      properties:
+        translate:
+          type: object
+          properties:
+            pending: { type: integer }
+            translated: { type: integer }
+            ready_for_chroma: { type: integer }
+            done: { type: integer }
+            failed: { type: integer }
+        chroma_doc:
+          type: object
+          properties:
+            queued: { type: integer }
+            upserted: { type: integer }
+            failed: { type: integer }
+    Trace:
+      type: object
+      properties:
+        natural_key: { $ref: '#/components/schemas/NaturalKey' }
+        translate: { $ref: '#/components/schemas/TranslateRow' }
+        chroma_docs: { type: array, items: { $ref: '#/components/schemas/ChromaDoc' } }

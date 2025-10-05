@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: postgres }
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      securityContext: { fsGroup: 999 }
+      containers:
+        - name: db
+          image: postgres:16
+          ports:
+            - { containerPort: 5432, name: pg }
+          env:
+            - { name: POSTGRES_USER, value: postgres }
+            - {
+                name: POSTGRES_PASSWORD,
+                valueFrom: {
+                  secretKeyRef: {
+                    name: postgres-auth,
+                    key: POSTGRES_PASSWORD
+                  }
+                }
+              }
+            - {
+                name: ODOO_DB_USER,
+                valueFrom: {
+                  secretKeyRef: {
+                    name: postgres-auth,
+                    key: ODOO_DB_USER
+                  }
+                }
+              }
+            - {
+                name: ODOO_DB_PASSWORD,
+                valueFrom: {
+                  secretKeyRef: {
+                    name: postgres-auth,
+                    key: ODOO_DB_PASSWORD
+                  }
+                }
+              }
+            - {
+                name: PORTAL_DB_USER,
+                valueFrom: {
+                  secretKeyRef: {
+                    name: postgres-auth,
+                    key: PORTAL_DB_USER
+                  }
+                }
+              }
+            - {
+                name: PORTAL_DB_PASSWORD,
+                valueFrom: {
+                  secretKeyRef: {
+                    name: postgres-auth,
+                    key: PORTAL_DB_PASSWORD
+                  }
+                }
+              }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d }
+      volumes:
+        - name: init
+          configMap: { name: postgres-init, defaultMode: 0755 }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi

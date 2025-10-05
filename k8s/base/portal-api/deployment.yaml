@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: portal-api }
+spec:
+  selector: { matchLabels: { app: portal-api } }
+  template:
+    metadata: { labels: { app: portal-api } }
+    spec:
+      serviceAccountName: portal-api
+      containers:
+        - name: api
+          image: dev-portal-api:latest
+          ports: [{ containerPort: 8000, name: http }]
+          env:
+            - { name: APP_ENV, valueFrom: { configMapKeyRef: { name: api-config, key: APP_ENV } } }
+            - { name: LOG_LEVEL, valueFrom: { configMapKeyRef: { name: api-config, key: LOG_LEVEL } } }
+            - { name: API_PORT, valueFrom: { configMapKeyRef: { name: api-config, key: API_PORT } } }
+            - { name: DB_HOST, valueFrom: { configMapKeyRef: { name: api-config, key: DB_HOST } } }
+            - { name: DB_PORT, valueFrom: { configMapKeyRef: { name: api-config, key: DB_PORT } } }
+            - { name: DB_NAME, valueFrom: { configMapKeyRef: { name: api-config, key: DB_NAME } } }
+            - { name: CHROMA_HOST, valueFrom: { configMapKeyRef: { name: api-config, key: CHROMA_HOST } } }
+            - { name: CHROMA_PORT, valueFrom: { configMapKeyRef: { name: api-config, key: CHROMA_PORT } } }
+            - { name: CHROMA_COLLECTION_FIELD_JA, valueFrom: { configMapKeyRef: { name: api-config, key: CHROMA_COLLECTION_FIELD_JA } } }
+            - { name: CHROMA_COLLECTION_VIEW_JA,  valueFrom: { configMapKeyRef: { name: api-config, key: CHROMA_COLLECTION_VIEW_JA } } }
+            - { name: DB_USER, valueFrom: { secretKeyRef: { name: api-auth, key: DB_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: api-auth, key: DB_PASSWORD } } }
+            - { name: API_BEARER_TOKEN, valueFrom: { secretKeyRef: { name: api-auth, key: API_BEARER_TOKEN } } }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 5, periodSeconds: 5 }
+          livenessProbe:  { httpGet: { path: /livez,   port: http }, initialDelaySeconds: 10, periodSeconds: 10 }
+          startupProbe:   { httpGet: { path: /startupz,port: http }, failureThreshold: 30, periodSeconds: 2 }

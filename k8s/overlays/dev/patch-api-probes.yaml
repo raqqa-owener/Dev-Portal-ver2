@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-api
+  namespace: portal-dev
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          # startupProbe は一旦使わない（/startupz 実装後に復活）

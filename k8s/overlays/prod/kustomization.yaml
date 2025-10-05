@@ -1,0 +1,48 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: portal-prod
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: api-config
+    behavior: replace
+    literals:
+      - APP_ENV=prod
+      - LOG_LEVEL=info
+      - API_PORT=8000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=portal
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - CHROMA_COLLECTION_FIELD_JA=portal_field_ja
+      - CHROMA_COLLECTION_VIEW_JA=portal_view_common_ja
+
+secretGenerator:
+  - name: api-auth
+    behavior: replace
+    literals:
+      - DB_USER=portal
+      - DB_PASSWORD=***REDACTED***
+      - API_BEARER_TOKEN=***REDACTED***
+  - name: postgres-auth
+    behavior: replace
+    literals:
+      - POSTGRES_PASSWORD=***REDACTED***
+      - ODOO_DB_USER=odoo
+      - ODOO_DB_PASSWORD=***REDACTED***
+      - PORTAL_DB_USER=portal
+      - PORTAL_DB_PASSWORD=***REDACTED***
+
+patchesStrategicMerge:
+  - patch-ingress-aws.yaml
+  - patch-hpa.yaml
+  - patch-storageclass.yaml
+  - patch-irsa.yaml
+  - patch-api-image.yaml

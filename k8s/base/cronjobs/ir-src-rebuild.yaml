@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ir-src-rebuild
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: psql
+              image: postgres:16
+              env:
+                - name: DB_HOST
+                  value: postgres
+                - name: DB_NAME
+                  value: portal
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-auth
+                      key: DB_USER
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-auth
+                      key: DB_PASSWORD
+              command: ["sh","-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  export PGPASSWORD="$DB_PASSWORD"
+                  psql "host=$DB_HOST dbname=$DB_NAME user=$DB_USER" -v ON_ERROR_STOP=1 <<SQL
+                  CREATE EXTENSION IF NOT EXISTS postgres_fdw;
+                  DO $$
+                  BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname='odoo_server') THEN
+                      CREATE SERVER odoo_server FOREIGN DATA WRAPPER postgres_fdw
+                        OPTIONS (host 'postgres', dbname 'odoo', port '5432');
+                    END IF;
+                  END$$;
+                  -- TODO: ir_*_src 再構築 SQL をここに追記
+                  SQL

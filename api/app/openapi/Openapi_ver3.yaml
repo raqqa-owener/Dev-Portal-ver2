@@ -1,0 +1,372 @@
+portal-dev-summary:
+  project: "Dev Portal & Translation → Chroma Pipeline"
+
+  phase:
+    current: "H" # Chroma upsert & search（v2/1536次元対応）
+    completed:
+      - "A: 基盤準備（K8s, DB, API起動）"
+      - "B: Repo層（Coreベース）…CRUD/UPSERT/Keyset/例外"
+      - "C: Odooミラー参照…public.ir_*_src を Rebuild SQL で構築、RepoでSELECT可"
+      - "D: 取込API（model/field/view_common + bootstrap_view）実装・動作確認（idempotent）"
+      - "E: 抽出→translate投入（同一source_hash NOP、JAあり & EN空のみ対象）"
+      - "F: 翻訳ジョブ（/translate/run、再翻訳抑止）"
+      - "G: パッケージング（/chroma/package → portal_chroma_doc.queued）"
+    next:
+      - "I: 運用最適化（ジョブ化/監視/メトリクス/清掃）"
+
+  runtime:
+    k8s_namespace: "portal-dev"
+    services:
+      postgres: "svc/postgres:5432"
+      chroma: "svc/chroma:8000"
+      portal_api: "svc/portal-api:80"
+    api_env:
+      DB_HOST: "postgres"
+      DB_PORT: 5432
+      DB_NAME: "devportal"
+      DB_USER: "dev"
+      DB_PASSWORD: "Dev-2025"
+      CHROMA_URL: "http://chroma:8000"
+      ALLOW_CHROMA_UPSERT: "true"
+      ALLOW_CHROMA_SEARCH: "true"
+      # 検索のフォールバック制御（Hで明示化）
+      CHROMA_SEARCH_FORCE_TEXT: "false" # true=常に query_texts（埋め込み使わない）
+      CHROMA_SEARCH_FALLBACK_ON_EMPTY: "false" # true=埋め込みヒット0件時に query_texts で再検索
+      # 埋め込み（v2統一: 1536次元 / OpenAI）
+      EMBED_PROVIDER: "openai"
+      OPENAI_API_KEY: "<set-in-secret>"
+      EMBED_MODEL: "text-embedding-3-small"
+      EMBED_DIMENSIONS: "1536"
+      EMBED_BATCH_SIZE: "16"
+    image:
+      tag: "portal-api:dev"
+      imagePullPolicy: "IfNotPresent"
+    port_forward_examples:
+      pg: "kubectl -n portal-dev port-forward svc/postgres 15432:5432"
+      api: "kubectl -n portal-dev port-forward svc/portal-api 30080:80"
+
+  db_objects:
+    source_tables:
+      - public.ir_model_src
+      - public.ir_field_src
+      - public.ir_view_src
+    portal_tables:
+      - public.portal_model
+      - public.portal_fields
+      - public.portal_view_common
+      - public.portal_view
+      - public.portal_translate
+      - public.portal_chroma_doc
+
+  collections:
+    strategy: "v2（1536次元/OpenAI）へ移行。v1（384次元/ローカル）は共存→段階的廃止。"
+    v2:
+      field: "portal_field_ja_v2"
+      view_common: "portal_view_common_ja_v2"
+      hnsw_space: "cosine"
+      embedding_dims: 1536
+    v1_legacy:
+      field: "portal_field_ja"
+      view_common: "portal_view_common_ja"
+      embedding_dims: 384
+    defaults:
+      # Swaggerのデフォルト/設定値も v2 に切替
+      search_collections: ["portal_field_ja_v2", "portal_view_common_ja_v2"]
+      package_collections: ["portal_field_ja_v2", "portal_view_common_ja_v2"] # Gの上書き既定（従来は v1）
+
+  migration:
+    approach: "新規コレクションに再投入→検索切替→旧コレクション清掃"
+    steps:
+      - "DB の portal_chroma_doc から v2 コレクション名で再パッケージ/再アップサート"
+      - "環境変数/Swagger 既定を v2 に変更（CHROMA_SEARCH_FORCE_TEXT=false 推奨）"
+      - "動作確認完了後に v1 を段階的清掃（任意）"
+
+  phase_h_contract:
+    title: "Chroma upsert & search（v2/1536次元 + distance返却）"
+    purpose: "portal_chroma_doc.state=queued を Chroma に upsert し、/chroma/search で距離順に横断検索できる状態にする"
+    scope:
+      includes:
+        - "Chroma Client 構築（接続確認・コレクション作成・hnsw:space=cosine）"
+        - "/chroma/upsert（queued のみ対象、dry_run あり、idempotent）"
+        - "/chroma/search（距離distance付きで返却、複数コレクション横断、v2既定）"
+        - "/chroma/query（POST、将来/拡張: SQLフォールバック対応）"
+        - "成功時 state 遷移（queued→upserted）、失敗は failed + last_error"
+      excludes:
+        - "検索UI（フロント）"
+        - "コレクション外の自動清掃"
+        - "追加の翻訳/パッケージング（前フェーズで完了前提）"
+    invariants:
+      - "Chroma の document.id は portal_chroma_doc.doc_id と一致（上書き許容）"
+      - "metadata は Chroma 側の型制約に従い、値は str|int|float|bool のみ（配列/ネストを禁止 or 文字列化）"
+      - "distance は cosine 距離（小さいほど近い）"
+      - "埋め込み次元はコレクション作成時に固定（v2=1536）"
+    env_flags:
+      ALLOW_CHROMA_UPSERT: true
+      ALLOW_CHROMA_SEARCH: true
+      CHROMA_SEARCH_FORCE_TEXT: false
+      CHROMA_SEARCH_FALLBACK_ON_EMPTY: false
+      EMBED_MODEL: "text-embedding-3-small"
+      EMBED_DIMENSIONS: 1536
+      CHROMA_URL: "http://chroma:8000"
+
+  api_contracts:
+    openapi_delta: # 既存OpenAPIへの追加/変更点（3.1）
+      paths:
+        /chroma/upsert:
+          post:
+            tags: ["Chroma"]
+            summary: "portal_chroma_doc.state=queued を Chroma に upsert（dry_run対応）"
+            requestBody:
+              required: true
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      collections:
+                        type: array
+                        items: { type: string }
+                        description: "対象コレクション（未指定は全queued）"
+                      limit:
+                        type: integer
+                        default: 1000
+                        minimum: 1
+                        maximum: 5000
+                      dry_run:
+                        type: boolean
+                        default: false
+            responses:
+              "200":
+                description: OK
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        processed: { type: integer }
+                        upserted: { type: integer }
+                        skipped: { type: integer }
+                        failed: { type: integer }
+                        errors:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              doc_id: { type: string }
+                              reason: { type: string }
+        /chroma/search:
+          get:
+            tags: ["Chroma"]
+            summary: "Chroma 検索（distance付き）"
+            parameters:
+              - in: query
+                name: q
+                required: true
+                schema: { type: string }
+                description: "検索クエリ（日本語OK）"
+              - in: query
+                name: collections
+                schema:
+                  type: array
+                  items: { type: string }
+                  default: ["portal_field_ja_v2", "portal_view_common_ja_v2"]
+                style: form
+                explode: true
+                description: "検索対象コレクション（カンマ区切り/複数指定可）"
+              - in: query
+                name: n
+                schema: { type: integer, default: 5, minimum: 1, maximum: 50 }
+                description: "返却件数"
+            responses:
+              "200":
+                description: OK
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        hits:
+                          type: array
+                          items:
+                            $ref: "#/components/schemas/ChromaSearchHit"
+        /chroma/query:
+          post:
+            tags: ["Chroma"]
+            summary: "Chroma ベクター検索（POST版、将来拡張/フォールバック用）"
+            requestBody:
+              required: true
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      q: { type: string }
+                      collections:
+                        type: array
+                        items: { type: string }
+                      limit:
+                        type: integer
+                        default: 5
+                        minimum: 1
+                        maximum: 100
+            responses:
+              "200":
+                description: OK
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        hits:
+                          type: array
+                          items:
+                            $ref: "#/components/schemas/ChromaSearchHit"
+      components:
+        schemas:
+          ChromaSearchHit:
+            type: object
+            properties:
+              doc_id: { type: string }
+              collection: { type: string }
+              distance: { type: number, format: float, description: "cosine距離（小さいほど近い）" }
+              document: { type: string, nullable: true }
+              metadata:
+                type: object
+                additionalProperties:
+                  oneOf:
+                    - { type: string }
+                    - { type: integer }
+                    - { type: number }
+                    - { type: boolean }
+
+  search_pipeline:
+    flow:
+      - "入力 q を EMBED_MODEL でベクター化（CHROMA_SEARCH_FORCE_TEXT=false時）"
+      - "collections を正規化（カンマ/重複/空要素除去）"
+      - "各コレクションへ query_embeddings（include: documents, metadatas, distances）"
+      - "distance 昇順にマージソートして上位 n を返却"
+      - "フォールバック（任意）: FORCE_TEXT または FallbackOnEmpty=true かつヒット0件 → query_texts で再検索"
+    defaults:
+      collections: ["portal_field_ja_v2", "portal_view_common_ja_v2"]
+      n_results: 5
+    distance:
+      metric: "cosine"
+      interpretation: "0 に近いほど類似度が高い"
+    safeguards:
+      - "埋め込み次元 ≠ コレクション次元 → InvalidDimension をログ&スキップ"
+      - "metadata に配列/オブジェクトが含まれる場合は文字列化して投入済み（Hで統一）"
+    observability:
+      logs:
+        - "chroma_search: collection, mode=embed|text, hits, ms"
+        - "InvalidDimension / Unauthorized / timeout を WARN/ERROR"
+      fields: ["q.hash8", "collections", "n", "hits.count", "mode", "err"]
+
+  upsert_pipeline:
+    selection:
+      table: "public.portal_chroma_doc"
+      state: "queued"
+      filters:
+        collections: "任意（未指定は全件）"
+      order: "id ASC（keyset相当）"
+      limit: 1000
+    chroma_client:
+      base_url: "${CHROMA_URL}"
+    collection_policy:
+      create_if_missing: true
+      metadata_defaults:
+        "hnsw:space": "cosine"
+    embedding_policy:
+      provider: "openai"
+      model: "${EMBED_MODEL}"
+      dims: "${EMBED_DIMENSIONS}" # v2=1536
+      batch_size: "${EMBED_BATCH_SIZE:-16}"
+    doc_text_source: "portal_chroma_doc.doc_text（ja）"
+    metadata_policy:
+      allowed_types: ["string", "integer", "number", "boolean"]
+      transform:
+        arrays_objects: "JSON文字列へ変換（保存前）"
+      required_keys: ["entity", "natural_key", "lang", "collection"]
+      passthrough: true
+    idempotency:
+      document_id: "doc_id（DB生成）"
+      strategy: "replace（同一 doc_id は上書き）"
+    state_transition:
+      on_success: "state=upserted, last_error=NULL, updated_at=now()"
+      on_failure: "state=failed, last_error=message（<=2000chars）, updated_at=now()"
+    dry_run: "DB/Chroma更新なし・件数のみ集計"
+    result_shape:
+      processed: "対象件数"
+      upserted: "Chroma投入成功件数"
+      skipped: "選別/変換でスキップ件数（不一致/無効）"
+      failed: "投入エラー件数"
+      errors:
+        - doc_id
+        - reason
+
+  openapi_alignment:
+    status: "Hの追加分（/chroma/search, /chroma/query, /chroma/upsert強化）を openapi/openapi.yaml に反映"
+    default_values:
+      search:
+        collections: ["portal_field_ja_v2", "portal_view_common_ja_v2"]
+        n: 5
+    security: "bearerAuth（devは任意/本番必須）"
+
+  repos_and_services_changes:
+    repos:
+      portal_chroma_doc_repo.py:
+        list_keyset_filters: ["state(status)", "entity", "model", "collection"]
+        methods:
+          - "list_queued(collections[], limit) -> QueuedDoc[]（metadataはJSON→dict化）"
+          - "mark_upserted(id)"
+          - "mark_failed(id, error)"
+      portal_translate_repo.py:
+        state_updates:
+          - "Gで ready_for_chroma 遷移を実装済み（Hでは変更なし）"
+    services:
+      chroma_search.py:
+        behavior:
+          - "OpenAI埋め込み（1536）をデフォルト"
+          - "CHROMA_SEARCH_FORCE_TEXT=true で常に query_texts"
+          - "fallback: CHROMA_SEARCH_FALLBACK_ON_EMPTY=true でヒット0件時のみ query_texts"
+          - "distance を float で返却、document/metadata を同梱"
+        normalization:
+          collections: "カンマ/重複/空除去"
+      chroma_upsert.py:
+        behavior:
+          - "metadata の型強制（配列/オブジェクト→JSON文字列）"
+          - "per-document try/catch、部分成功許容"
+
+  k8s_changes:
+    overlays:
+      dev:
+        env:
+          set:
+            - "ALLOW_CHROMA_UPSERT=true"
+            - "ALLOW_CHROMA_SEARCH=true"
+            - "CHROMA_SEARCH_FORCE_TEXT=false"
+            - "CHROMA_SEARCH_FALLBACK_ON_EMPTY=false"
+            - "EMBED_MODEL=text-embedding-3-small"
+            - "EMBED_DIMENSIONS=1536"
+
+  swagger_defaults:
+    change:
+      - "/chroma/search の collections 既定を v2 に変更"
+      - "description に distance（cosine）を明記"
+
+  risks_and_mitigations:
+    - risk: "埋め込み次元不一致（1536 vs 384）"
+      mitigation: "v2コレクションへ統一・Swagger既定も v2 に・フォールバック無効"
+    - risk: "OpenAI 接続失敗/認証エラー"
+      mitigation: "環境変数/ネットワーク確認・必要時 CHROMA_SEARCH_FORCE_TEXT=true で一時回避"
+    - risk: "Chroma metadata 型エラー（配列/オブジェクト）"
+      mitigation: "upsert 前に str へ整形（JSON文字列化）"
+    - risk: "ONNXダウンロードで遅延"
+      mitigation: "フォールバック無効化（CHROMA_SEARCH_FALLBACK_ON_EMPTY=false）"
+
+  dod:
+    phase_h:
+      - "POST /chroma/upsert：queued → upserted が期待件数増加、failed はログに理由"
+      - "GET /chroma/search：v2 コレクションで distance 付きヒットが返る（curl/Swagger両方）"
+      - "次元不一致・APIエラーは Problem+JSON で可視化、サービスログにトレース"
+      - "メタの型違反が無い（配列/オブジェクトは文字列化されている）"

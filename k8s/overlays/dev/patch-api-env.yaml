@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: CHROMA_URL
+              value: "http://chroma:8000"
+            - name: ALLOW_CHROMA_UPSERT
+              value: "true"
+            - name: EMBED_PROVIDER
+              value: "openai"
+            - name: EMBED_MODEL
+              value: "text-embedding-3-small"
+            - name: EMBED_DIMENSIONS
+              value: "1536"
+            - name: EMBED_BATCH_SIZE
+              value: "64"
+            - name: CHROMA_TIMEOUT_S
+              value: "10"
+            - name: SQL_ECHO
+              value: "true"
+            - name: LOG_LEVEL
+              value: "DEBUG"

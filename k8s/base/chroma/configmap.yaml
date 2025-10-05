@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chroma-bootstrap
+  labels:
+    app: chroma
+data:
+  entrypoint.sh: |-
+    #!/usr/bin/env sh
+    set -euo pipefail
+
+    # 1) 必要パッケージのインストール（CPU版・サーバ必要分）
+    export PIP_DISABLE_PIP_VERSION_CHECK=1
+    python -m pip install --no-cache-dir --upgrade pip
+    python -m pip install --no-cache-dir \
+      "numpy==1.26.4" \
+      "uvicorn==0.30.6" \
+      "chromadb[server]==0.4.24"
+
+    # 2) 実行環境の確認（この echo はログに出ます）
+    python - <<'PY'
+    import numpy
+    print("numpy", numpy.__version__)
+    try:
+        import chromadb
+        print("chromadb", getattr(chromadb, "__version__", "unknown"))
+    except Exception as e:
+        print("chromadb import failed:", e)
+    PY
+
+    # 3) サーバ起動（★ これが本体。python -m chromadb は使いません）
+    exec uvicorn chromadb.app:app \
+      --host 0.0.0.0 \
+      --port 8000 \
+      --timeout-keep-alive 30

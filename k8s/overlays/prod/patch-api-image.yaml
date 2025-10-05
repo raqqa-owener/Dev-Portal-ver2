@@ -1,0 +1,9 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: portal-api }
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          image: your-registry/portal-api:1.0.0

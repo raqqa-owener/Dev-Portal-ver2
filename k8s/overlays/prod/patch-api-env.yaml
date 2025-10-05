@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: portal-api
+          env:
+            - name: ALLOW_CHROMA_UPSERT
+              value: "false"  # 本番は /chroma/search のみ

@@ -1,0 +1,62 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: portal-dev
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: api-config
+    literals:
+      - APP_ENV=dev
+      - LOG_LEVEL=info
+      - API_PORT=8000
+      - DB_HOST=postgres.portal-dev.svc.cluster.local   # ★ ServiceのFQDNに
+      - DB_PORT=5432
+      - DB_NAME=devportal                                # ★ 実DBに合わせる
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - CHROMA_COLLECTION_FIELD_JA=portal_field_ja
+      - CHROMA_COLLECTION_VIEW_JA=portal_view_common_ja
+
+secretGenerator:
+  - name: api-auth
+    literals:
+      - DB_USER=dev              # ★ 実ユーザーに合わせる
+      - DB_PASSWORD=dev          # ★ 実パスワードに合わせる
+      - API_BEARER_TOKEN=dev-token
+  - name: postgres-auth
+    literals:
+      - POSTGRES_PASSWORD=change-postgres-pass
+      - ODOO_DB_USER=odoo
+      - ODOO_DB_PASSWORD=change-odoo-pass
+      - PORTAL_DB_USER=dev       # 任意（合わせておくと管理が楽）
+      - PORTAL_DB_PASSWORD=dev
+
+# ↓↓↓ ここがポイント：patches に統一して確実に当てる
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: portal-api
+    path: patch-api-image.yaml
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: portal-api
+    path: patch-api-env.yaml
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: portal-api
+    path: patch-api-replicas.yaml
+  - path: patch-ingress-hosts.yaml
+  - target: { group: apps, version: v1, kind: Deployment, name: portal-api }
+    path: patch-api-probes.yaml

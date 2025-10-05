@@ -1,0 +1,1 @@
+# JA text detection

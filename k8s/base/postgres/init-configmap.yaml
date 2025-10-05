@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  init-multi-db.sh: |-
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Session GUC にシークレット値を流し込み（DO内で current_setting で参照）
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<SQL
+    SET app.odoo_user   TO '${ODOO_DB_USER}';
+    SET app.odoo_pass   TO '${ODOO_DB_PASSWORD}';
+    SET app.portal_user TO '${PORTAL_DB_USER}';
+    SET app.portal_pass TO '${PORTAL_DB_PASSWORD}';
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = current_setting('app.odoo_user', true)) THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L',
+                       current_setting('app.odoo_user', true),
+                       current_setting('app.odoo_pass', true));
+      END IF;
+
+      IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'odoo') THEN
+        EXECUTE format('CREATE DATABASE %I OWNER %I', 'odoo',
+                       current_setting('app.odoo_user', true));
+      END IF;
+
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = current_setting('app.portal_user', true)) THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L',
+                       current_setting('app.portal_user', true),
+                       current_setting('app.portal_pass', true));
+      END IF;
+
+      IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'portal') THEN
+        EXECUTE format('CREATE DATABASE %I OWNER %I', 'portal',
+                       current_setting('app.portal_user', true));
+      END IF;
+    END
+    $$;
+    SQL
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" -d portal <<SQL
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    CREATE EXTENSION IF NOT EXISTS postgres_fdw;
+    SQL
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" -d odoo <<SQL
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    SQL

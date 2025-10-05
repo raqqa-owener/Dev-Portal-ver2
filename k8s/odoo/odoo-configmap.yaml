@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odoo-config
+  namespace: odoo
+data:
+  odoo.conf: |
+    [options]
+    ; --- DB 接続（infra の Postgres を利用）---
+    db_host = postgres.infra.svc.cluster.local
+    db_port = 5432
+    db_user = odoo
+    db_password = odoo
+    db_name = odoo
+
+    ; --- Ingress 経由での動作に必要 ---
+    proxy_mode = True
+
+    ; --- DEV向け(単一プロセス) ---
+    workers = 0
+
+    ; --- 任意（DB管理画面で必要。開発だけで使う想定）---
+    admin_passwd = admin

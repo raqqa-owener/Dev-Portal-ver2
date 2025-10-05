@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node/JS（もし使っていれば）
+node_modules/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Project
+logs/
+*.log
+.env
+.env.*
+bootstrap_full.sh:Zone.Identifier

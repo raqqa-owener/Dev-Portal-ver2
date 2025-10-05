@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - postgres/statefulset.yaml
+  - postgres/service.yaml
+  - postgres/init-configmap.yaml
+  - odoo/deployment.yaml
+  - odoo/service.yaml
+  - odoo/ingress.yaml
+  - odoo/pvc.yaml
+  - chroma/statefulset.yaml
+  - chroma/service.yaml
+  - portal-api/serviceaccount.yaml
+  - portal-api/deployment.yaml
+  - portal-api/service.yaml
+  - portal-api/ingress.yaml
+  - portal-api/hpa.yaml
+  - cronjobs/ir-src-rebuild.yaml
+  - cronjobs/cj-extract-view.yaml
+  - cronjobs/cj-extract-field.yaml
+  - cronjobs/cj-translate-run.yaml
+  - cronjobs/cj-chroma-package.yaml
+  - cronjobs/cj-chroma-upsert.yaml
